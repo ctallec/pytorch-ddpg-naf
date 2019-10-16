@@ -1,9 +1,8 @@
-import sys
+import os
 
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from torch.autograd import Variable
 import torch.nn.functional as F
 
 def MSELoss(input, target):
@@ -50,10 +49,10 @@ class Policy(nn.Module):
         self.L.weight.data.mul_(0.1)
         self.L.bias.data.mul_(0.1)
 
-        self.tril_mask = Variable(torch.tril(torch.ones(
-            num_outputs, num_outputs), diagonal=-1).unsqueeze(0))
-        self.diag_mask = Variable(torch.diag(torch.diag(
-            torch.ones(num_outputs, num_outputs))).unsqueeze(0))
+        self.tril_mask = torch.tril(torch.ones(
+            num_outputs, num_outputs), diagonal=-1).unsqueeze(0)
+        self.diag_mask = torch.diag(torch.diag(
+            torch.ones(num_outputs, num_outputs))).unsqueeze(0)
 
     def forward(self, inputs):
         x, u = inputs
@@ -87,7 +86,7 @@ class NAF:
     def __init__(self, gamma, tau, hidden_size, num_inputs, action_space):
         self.action_space = action_space
         self.num_inputs = num_inputs
-        
+
         self.model = Policy(hidden_size, num_inputs, action_space)
         self.target_model = Policy(hidden_size, num_inputs, action_space)
         self.optimizer = Adam(self.model.parameters(), lr=1e-3)
@@ -99,7 +98,7 @@ class NAF:
 
     def select_action(self, state, action_noise=None, param_noise=None):
         self.model.eval()
-        mu, _, _ = self.model((Variable(state), None))
+        mu, _, _ = self.model((state, None))
         self.model.train()
         mu = mu.data
         if action_noise is not None:
@@ -108,11 +107,11 @@ class NAF:
         return mu.clamp(-1, 1)
 
     def update_parameters(self, batch):
-        state_batch = Variable(torch.cat(batch.state))
-        action_batch = Variable(torch.cat(batch.action))
-        reward_batch = Variable(torch.cat(batch.reward))
-        mask_batch = Variable(torch.cat(batch.mask))
-        next_state_batch = Variable(torch.cat(batch.next_state))
+        state_batch = torch.cat(batch.state)
+        action_batch = torch.cat(batch.action)
+        reward_batch = torch.cat(batch.reward)
+        mask_batch = torch.cat(batch.mask)
+        next_state_batch = torch.cat(batch.next_state)
 
         _, _, next_state_values = self.target_model((next_state_batch, None))
 
@@ -138,7 +137,7 @@ class NAF:
             os.makedirs('models/')
 
         if model_path is None:
-            model_path = "models/naf_{}_{}".format(env_name, suffix) 
+            model_path = "models/naf_{}_{}".format(env_name, suffix)
         print('Saving model to {}'.format(actor_path))
         torch.save(self.model.state_dict(), model_path)
 

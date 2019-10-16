@@ -8,12 +8,12 @@ import torch.nn.functional as F
 from utils import soft_update, hard_update
 
 class Actor(nn.Module):
-    def __init__(self, hidden_size, num_inputs, action_space):
+    def __init__(self, hidden_size, num_inputs, num_noises, action_space):
         super(Actor, self).__init__()
         self.action_space = action_space
         num_outputs = action_space.shape[0]
 
-        self.linear1 = nn.Linear(num_inputs, hidden_size)
+        self.linear1 = nn.Linear(num_inputs + num_noises, hidden_size)
         self.ln1 = nn.LayerNorm(hidden_size)
 
         self.linear2 = nn.Linear(hidden_size, hidden_size)
@@ -23,8 +23,8 @@ class Actor(nn.Module):
         self.mu.weight.data.mul_(0.1)
         self.mu.bias.data.mul_(0.1)
 
-    def forward(self, inputs):
-        x = inputs
+    def forward(self, inputs, noises):
+        x = torch.cat((inputs, noises), -1)
         x = self.linear1(x)
         x = self.ln1(x)
         x = F.relu(x)
@@ -63,15 +63,16 @@ class Critic(nn.Module):
         V = self.V(x)
         return V
 
-class DDPG(object):
-    def __init__(self, gamma, tau, hidden_size, num_inputs, action_space):
+class SPG(object):
+    def __init__(self, gamma, tau, hidden_size, num_inputs, num_noises, action_space):
 
         self.num_inputs = num_inputs
+        self.num_noises = num_noises
         self.action_space = action_space
 
-        self.actor = Actor(hidden_size, self.num_inputs, self.action_space)
-        self.actor_target = Actor(hidden_size, self.num_inputs, self.action_space)
-        self.actor_perturbed = Actor(hidden_size, self.num_inputs, self.action_space)
+        self.actor = Actor(hidden_size, self.num_inputs, self.num_noises, self.action_space)
+        self.actor_target = Actor(hidden_size, self.num_inputs, self.num_noises, self.action_space)
+        self.actor_perturbed = Actor(hidden_size, self.num_inputs, self.num_noises, self.action_space)
         self.actor_optim = Adam(self.actor.parameters(), lr=1e-4)
 
         self.critic = Critic(hidden_size, self.num_inputs, self.action_space)
@@ -87,10 +88,11 @@ class DDPG(object):
 
     def select_action(self, state, action_noise=None, param_noise=None):
         self.actor.eval()
+        noise = torch.randn(state.size(0), self.num_noises)
         if param_noise is not None:
-            mu = self.actor_perturbed(state)
+            mu = self.actor_perturbed(state, noise)
         else:
-            mu = self.actor(state)
+            mu = self.actor(state, noise)
 
         self.actor.train()
         mu = mu.data
@@ -107,8 +109,9 @@ class DDPG(object):
         reward_batch = torch.cat(batch.reward)
         mask_batch = torch.cat(batch.mask)
         next_state_batch = torch.cat(batch.next_state)
+        action_noise_batch = torch.zeros(state_batch.size(0), self.num_noises)
 
-        next_action_batch = self.actor_target(next_state_batch)
+        next_action_batch = self.actor_target(next_state_batch, action_noise_batch)
         next_state_action_values = self.critic_target(next_state_batch, next_action_batch)
 
         reward_batch = reward_batch.unsqueeze(1)
@@ -125,7 +128,7 @@ class DDPG(object):
 
         self.actor_optim.zero_grad()
 
-        policy_loss = -self.critic((state_batch), self.actor((state_batch)))
+        policy_loss = -self.critic(state_batch, self.actor(state_batch, action_noise_batch))
 
         policy_loss = policy_loss.mean()
         policy_loss.backward()
@@ -151,9 +154,9 @@ class DDPG(object):
             os.makedirs('models/')
 
         if actor_path is None:
-            actor_path = "models/ddpg_actor_{}_{}".format(env_name, suffix)
+            actor_path = "models/spg_actor_{}_{}".format(env_name, suffix)
         if critic_path is None:
-            critic_path = "models/ddpg_critic_{}_{}".format(env_name, suffix)
+            critic_path = "models/spg_critic_{}_{}".format(env_name, suffix)
         print('Saving models to {} and {}'.format(actor_path, critic_path))
         torch.save(self.actor.state_dict(), actor_path)
         torch.save(self.critic.state_dict(), critic_path)
